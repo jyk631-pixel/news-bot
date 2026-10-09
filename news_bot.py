@@ -150,15 +150,25 @@ def summarize(it):
             "반도체 애널리스트에게 보고할 뉴스입니다. 한국어로 정확히 두 줄로 요약하세요.\n"
             "1줄: 무슨 일인지(사실). 2줄: 투자/사업 관점의 시사점.\n"
             "아래 내용에 없는 사실은 추측하지 마세요. 정보가 제목뿐이면 제목 기준으로만 쓰세요. "
-            "두 줄 외 다른 말은 쓰지 마세요.\n\n"
+            "두 줄 외 다른 말은 쓰지 마세요.\n"
+            "단, 기사의 핵심이 '주가가 올랐다/내렸다', 시황, 주가 등락 원인 추측 같은 단순 주가 변동 보도라면 "
+            "요약하지 말고 정확히 SKIP 한 단어만 출력하세요. "
+            "실적, 계약, 투자, 증설, 신제품, 기술, 인사, 소송, 공급/수요 같은 사업 내용이 핵심이면 "
+            "주가 언급이 있어도 SKIP하지 말고 요약하세요.\n\n"
             f"회사: {it['company']}\n제목: {it['title']}\n출처: {it['source']}\n내용: {body[:1500]}"}],
     )
-    return msg.content[0].text.strip()
+    out = msg.content[0].text.strip()
+    return None if out.upper().startswith("SKIP") else out
+
+
+def esc(x):
+    return html.escape(x, quote=True)
 
 
 def send(text):
     r = requests.post(f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-        json={"chat_id": TG_CHAT, "text": text, "disable_web_page_preview": True}, timeout=20)
+        json={"chat_id": TG_CHAT, "text": text, "parse_mode": "HTML",
+              "disable_web_page_preview": True}, timeout=20)
     r.raise_for_status()
 
 
@@ -178,8 +188,14 @@ def main():
         for it in new:
             try:
                 tag = "🏛공식" if it["official"] else "📰"
-                s = "" if it["skip_llm"] else summarize(it) + "\n\n"
-                send(f"{tag} [{it['company']}] {it['title']}\n\n{s}{it['source']}\n{it['link']}")
+                summ = "" if it["skip_llm"] else summarize(it)
+                if summ is None:  # 단순 주가 등락 기사: 보내지 않고 처리 완료로 기록
+                    print("SKIP(주가기사):", it["title"])
+                    seen.add(it["link"])
+                    continue
+                body = f"{esc(summ)}\n\n" if summ else ""
+                send(f"{tag} <b>[{it['company']}]</b> {esc(it['title'])}\n\n{body}"
+                     f"{esc(it['source'])} · <a href=\"{esc(it['link'])}\">원문 보기</a>")
                 seen.add(it["link"])
             except Exception as ex:
                 print("실패:", ex, file=sys.stderr)  # seen에 안 넣어 다음 턴에 재시도

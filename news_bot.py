@@ -11,7 +11,8 @@ import feedparser, requests, anthropic
 
 STATE_FILE = Path("seen.json")          # 파일명 유지 (워크플로 수정 불필요)
 MODEL = "claude-haiku-5-5"
-UA = "Mozilla/5.0 (news-bot)"
+UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+      "Chrome/124.0 Safari/537.36")
 MAX_AGE_HOURS = 48                      # Google News 기사에만 적용
 OFFICIAL_BASELINE_DAYS = 3              # 새 공식 소스 첫 수집 때: 최근 3일 이내 기사는 알림, 그 이전은 조용히 기록
 OFFICIAL_IGNORE_DAYS = 30               # 공식 소스에서 30일보다 오래된 항목은 무시
@@ -76,7 +77,8 @@ def esc(x):
 
 
 def http_get(url, **kw):
-    r = requests.get(url, headers={"User-Agent": UA}, timeout=30, **kw)
+    r = requests.get(url, headers={"User-Agent": UA, "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
+                                   "Accept-Language": "en-US,en;q=0.9"}, timeout=30, **kw)
     r.raise_for_status()
     return r
 
@@ -185,9 +187,11 @@ def src_sandisk_ir():
     last = None
     for url in SANDISK_IR_LIST:
         try:
-            out = parse_sandisk_ir(http_get(url).text)
+            resp = http_get(url)
+            out = parse_sandisk_ir(resp.text)
             if out:
                 return out, len(out)
+            last = RuntimeError(f"파싱 0건 (응답 {len(resp.text)}자, 링크 {resp.text.count('<a ')}개) {url}")
         except Exception as ex:
             last = ex
     if last:
@@ -236,12 +240,12 @@ def collect():
         try:
             got, n = fn()
             print(f"[{skey}] {len(got)}건 (정상판단 {n})")
-            status[skey] = (True, n)
+            status[skey] = (True, n, "응답은 왔지만 항목 0건" if n == 0 else "")
             for it in got:
                 items.setdefault(it["link"], it)
         except Exception as ex:
             print(f"[{skey}] 수집 실패: {ex}", file=sys.stderr)
-            status[skey] = (False, 0)
+            status[skey] = (False, 0, f"{type(ex).__name__}: {str(ex)[:120]}")
     return list(items.values()), status
 
 
@@ -318,7 +322,7 @@ def save_state(st):
 
 
 def update_health(st, status):
-    for skey, (ok, n) in status.items():
+    for skey, (ok, n, err) in status.items():
         h = st["health"].setdefault(skey, {"fails": 0, "alerted": False})
         good = ok and (n > 0)
         if good:
@@ -327,10 +331,12 @@ def update_health(st, status):
             h["fails"], h["alerted"] = 0, False
         else:
             h["fails"] += 1
-            if skey in CRITICAL | {"gnews"} and h["fails"] >= FAIL_ALERT_RUNS and not h["alerted"]:
+            if skey in CRITICAL | {"gnews"} and h["fails"] >= FAIL_ALERT_RUNS and \
+                    (not h["alerted"] or h.get("alert_err") != err):   # 원인 문구가 바뀌면 한 번 더 알림
                 send(f"⚠️ {SOURCE_LABEL.get(skey, skey)} 수집이 연속 {h['fails']}회 실패했습니다.\n"
-                     f"이 소스의 새 소식이 누락될 수 있어요. GitHub Actions 로그를 확인해 주세요.")
-                h["alerted"] = True
+                     f"원인: {esc(err or '알 수 없음')}\n"
+                     f"이 소스의 새 소식이 누락될 수 있어요.")
+                h["alerted"], h["alert_err"] = True, err
 
 
 # ───────── 메인 ─────────
@@ -393,7 +399,8 @@ def main():
                     if not it["official"]:
                         raise                         # 뉴스 기사는 다음 턴에 재시도
                     print("요약 실패(공식 기사는 요약 없이 전송):", ex, file=sys.stderr)
-                    summ, is_product = "(요약 생성 실패 - 원문을 확인하세요)", bool(PRODUCT_RE.search(it["title"]))
+                    summ = f"(요약 생성 실패 - 원문을 확인하세요) [{type(ex).__name__}: {str(ex)[:100]}]"
+                    is_product = bool(PRODUCT_RE.search(it["title"]))
                 if summ is None:
                     print("SKIP(주가기사):", it["title"])
                     mark(it["link"]); continue
@@ -408,7 +415,7 @@ def main():
         except Exception as ex:
             print("전송 실패(다음 실행에서 재시도):", ex, file=sys.stderr)
 
-    for skey, (ok, n) in status.items():
+    for skey, (ok, n, err) in status.items():
         if ok:
             init.add(skey)
     st.update(seen=seen, init=sorted(init), titles=sorted(titles))

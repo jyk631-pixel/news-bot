@@ -230,8 +230,13 @@ def src_sandisk_news():
     return [i for i in found.values() if i["ts"] > cutoff], len(found)
 
 
+# Sandisk IR 사이트가 GitHub 서버 접속에 응답하지 않아 기본은 꺼 둠 (다른 곳에서 돌릴 때 True로)
+SANDISK_IR_ENABLED = False
+
 SOURCES = [("gnews", src_gnews), ("sec", src_sec), ("kioxia", src_kioxia),
-           ("sandisk_ir", src_sandisk_ir), ("sandisk_news", src_sandisk_news)]
+           ("sandisk_news", src_sandisk_news)]
+if SANDISK_IR_ENABLED:
+    SOURCES.append(("sandisk_ir", src_sandisk_ir))
 
 
 def collect():
@@ -277,7 +282,7 @@ def summarize(it):
         "TAG 줄 없이 정확히 SKIP 한 단어만 출력하세요. 실적, 계약, 투자, 증설, 신제품, 기술, 인사, 소송, "
         "공급/수요 같은 사업 내용이 핵심이면 주가 언급이 있어도 SKIP하지 말고 요약하세요.\n")
     msg = claude.messages.create(
-        model=MODEL, max_tokens=350,
+        model=MODEL, max_tokens=1500,
         messages=[{"role": "user", "content":
             "반도체 애널리스트에게 보고할 뉴스입니다. 아래 형식으로만 답하세요.\n"
             "첫 줄: 'TAG: 제품' (신제품·샘플링·양산·기술/로드맵 발표 등 제품·기술 관련) 또는 'TAG: 기타'\n"
@@ -286,7 +291,10 @@ def summarize(it):
             + skip_rule + "\n"
             f"회사: {it['company']}\n제목: {it['title']}\n출처: {it['source']}\n내용: {body[:1500]}"}],
     )
-    out = msg.content[0].text.strip()
+    # 응답에 'thinking' 블록이 섞여 올 수 있어, 텍스트 블록만 이어 붙임
+    out = "".join(getattr(b, "text", "") for b in msg.content if getattr(b, "type", "") == "text").strip()
+    if not out:
+        raise ValueError("응답에 텍스트가 없음 (stop_reason=%s)" % getattr(msg, "stop_reason", "?"))
     if out.upper().startswith("SKIP"):
         return False, None
     lines = [l for l in out.splitlines() if l.strip()]

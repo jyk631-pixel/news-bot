@@ -29,6 +29,8 @@ GNEWS = [
     ("Sandisk", "Sandisk", "en-US&gl=US&ceid=US:en"),
     ("Sandisk", "샌디스크", "ko&gl=KR&ceid=KR:ko"),
     ("Sandisk", "Sandisk site:businesswire.com", "en-US&gl=US&ceid=US:en"),
+    ("Sandisk", "Sandisk site:investor.sandisk.com", "en-US&gl=US&ceid=US:en"),
+    ("Sandisk", "Sandisk announces SSD OR NAND OR BiCS", "en-US&gl=US&ceid=US:en"),
 ]
 
 # 직접 RSS/Atom (회사, 이름, URL) - 알게 되는 대로 한 줄씩 추가
@@ -78,7 +80,7 @@ def esc(x):
 
 def http_get(url, **kw):
     r = requests.get(url, headers={"User-Agent": UA, "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
-                                   "Accept-Language": "en-US,en;q=0.9"}, timeout=30, **kw)
+                                   "Accept-Language": "en-US,en;q=0.9"}, timeout=15, **kw)
     r.raise_for_status()
     return r
 
@@ -184,19 +186,18 @@ def parse_sandisk_ir(page_html, limit=30):
 
 
 def src_sandisk_ir():
-    last = None
+    errs = []
     for url in SANDISK_IR_LIST:
+        host = url.split("/")[2]
         try:
             resp = http_get(url)
             out = parse_sandisk_ir(resp.text)
             if out:
                 return out, len(out)
-            last = RuntimeError(f"파싱 0건 (응답 {len(resp.text)}자, 링크 {resp.text.count('<a ')}개) {url}")
+            errs.append(f"{host}: 파싱 0건(응답 {len(resp.text)}자)")
         except Exception as ex:
-            last = ex
-    if last:
-        raise last
-    return [], 0
+            errs.append(f"{host}: {type(ex).__name__}")
+    raise RuntimeError(" / ".join(errs))
 
 
 def src_sandisk_news():
@@ -340,7 +341,22 @@ def update_health(st, status):
 
 
 # ───────── 메인 ─────────
+def self_test():
+    """Actions에서 Run workflow(수동 실행)로 돌렸을 때만: 요약 기능이 되는지 확인해서 텔레그램으로 알림"""
+    sample = item("kioxia", "Kioxia", "Kioxia Introduces E1.L QLC-based SSDs for Hyperscale Data Centers",
+                  "https://example.com", "테스트", time.time(),
+                  summary="Kioxia announced E1.L form factor QLC SSDs based on BiCS FLASH generation 8, "
+                          "sampling to select customers for hyperscale data centers.")
+    try:
+        is_product, summ = summarize(sample)
+        send(f"🧪 요약 테스트 성공 (제품 판정: {'예' if is_product else '아니오'})\n\n{esc(summ or '')}")
+    except Exception as ex:
+        send(f"🧪 요약 테스트 실패\n원인: {esc(type(ex).__name__)}: {esc(str(ex)[:300])}")
+
+
 def main():
+    if os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch":
+        self_test()
     st = load_state()
     seen = list(st["seen"]); seen_set = set(seen)
     init = set(st["init"]); titles = set(st["titles"])

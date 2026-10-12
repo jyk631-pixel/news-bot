@@ -60,6 +60,19 @@ OFFICIAL_SOURCES = CRITICAL
 SOURCE_LABEL = {"kioxia": "Kioxia 뉴스룸", "sandisk_ir": "Sandisk IR 뉴스",
                 "sandisk_news": "Sandisk 뉴스룸", "sec": "SEC 공시", "gnews": "Google News"}
 
+# ───────── 보고받고 싶지 않은 것 (Google News 기사에만 적용, 공식 소스는 항상 전달) ─────────
+# 출처 이름이 정확히 일치하면 차단 (소문자로 비교)
+BLOCK_SOURCES = {"x", "x.com", "twitter", "twitter.com", "calgary roughnecks"}
+# 제목이나 출처에 이 단어가 들어 있으면 차단 (소문자로 비교)
+BLOCK_WORDS = ["roughnecks", "powerball", "lottery", "파워볼", "자동배팅", "토토", "twitter", "x.com"]
+
+
+def blocked(it):
+    src = it["source"].strip().lower()
+    text = (it["title"] + " " + it["source"]).lower()
+    return src in BLOCK_SOURCES or any(w in text for w in BLOCK_WORDS)
+
+
 PRODUCT_RE = re.compile(
     r"\b(ssd|nand|bics|flash|hbf|pcie|nvme|ufs|dram|memory|series|sampling|"
     r"introduc\w*|unveil\w*|launch\w*|new\s+\w*\s*(card|drive))\b|発表|サンプル|출시|신제품", re.I)
@@ -280,7 +293,10 @@ def summarize(it):
     skip_rule = "" if it["official"] else (
         "단, 기사의 핵심이 '주가가 올랐다/내렸다', 시황, 주가 등락 원인 추측 같은 단순 주가 변동 보도라면 "
         "TAG 줄 없이 정확히 SKIP 한 단어만 출력하세요. 실적, 계약, 투자, 증설, 신제품, 기술, 인사, 소송, "
-        "공급/수요 같은 사업 내용이 핵심이면 주가 언급이 있어도 SKIP하지 말고 요약하세요.\n")
+        "공급/수요 같은 사업 내용이 핵심이면 주가 언급이 있어도 SKIP하지 말고 요약하세요.\n"
+        "또한 해당 회사(Kioxia, Sandisk)의 사업·제품·기술·실적·메모리/스토리지 산업과 명백히 무관한 글"
+        "(스포츠팀 후원, 복권/도박, 스팸, 광고, 일반 소비자 사용 팁, 이름만 우연히 겹친 글)도 SKIP하세요. "
+        "제목만으로 판단이 어려워도 산업·사업 관련 가능성이 있으면 SKIP하지 말고 요약하세요.\n")
     msg = claude.messages.create(
         model=MODEL, max_tokens=1500,
         messages=[{"role": "user", "content":
@@ -390,6 +406,8 @@ def main():
             if norm_title(it["title"]) in titles:
                 mark(it["link"]); continue            # 다른 공식 소스에서 이미 보낸 같은 제목
         else:
+            if blocked(it):
+                mark(it["link"]); continue            # 차단 목록(스팸, 무관한 출처)
             if it["skey"] not in init:
                 mark(it["link"]); continue            # 새 뉴스 소스 첫 수집: 조용히 기록
             if it["ts"] < now - MAX_AGE_HOURS * 3600:
